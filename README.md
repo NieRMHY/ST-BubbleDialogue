@@ -15,7 +15,7 @@ SillyTavern 对话气泡渲染扩展，提供头像管理、对话气泡美化�
 
 ## 安装
 
-### 方式一：官方扩展商店安装（推荐）
+### 步骤 1：安装前端扩展
 
 在 SillyTavern 的 **扩展 → 管理扩展 → 安装扩展** 中粘贴以下 URL：
 
@@ -23,46 +23,44 @@ SillyTavern 对话气泡渲染扩展，提供头像管理、对话气泡美化�
 https://github.com/NieRMHY/ST-BubbleDialogue
 ```
 
-<details>
-<summary>官方安装对服务端同步的限制</summary>
+安装完成后 **重启 SillyTavern**。
 
-官方安装只安装前端扩展部分。如需**服务端同步**功能，需要额外执行：
+### 步骤 2：安装服务端同步插件（☁ 同步功能必需）
+
+前端扩展安装后，还需要手动安装服务端插件才能使用同步功能。在 **SillyTavern 根目录**下执行：
 
 ```bash
-# ST 根目录下执行
-mkdir -p plugins/ST-BubbleDialogue
-ln -sf ../../../public/scripts/extensions/third-party/ST-BubbleDialogue/server.js \
-  plugins/ST-BubbleDialogue/index.js
+bash public/scripts/extensions/third-party/ST-BubbleDialogue/install.sh
 ```
 
-并在 `config.yaml` 中设置 `enableServerPlugins: true`，然后重启 ST。
+> 该脚本会：
+> 1. 在 `plugins/ST-BubbleDialogue/` 下创建指向 `server.js` 的软链接
+> 2. 检查 `config.yaml` 中的 `enableServerPlugins` 配置
 
-</details>
+### 步骤 3：启用服务端插件
 
-### 方式二：本地手动安装
+编辑 SillyTavern 根目录下的 `config.yaml`，找到并修改：
 
-> [!NOTE]
-> 以下路径均以 **SillyTavern 根目录**（`SillyTavern/`）为当前目录。
+```yaml
+enableServerPlugins: true
+```
+
+### 步骤 4：重启 SillyTavern
+
+再次重启 ST，同步功能即可使用。
+
+---
+
+### 本地手动安装（备选）
+
+如果不使用官方扩展商店，也可以直接用 git clone：
 
 ```bash
-# SillyTavern 根目录下执行
-# 1. 克隆前端扩展
+# 在 SillyTavern 根目录下执行
 git clone https://github.com/NieRMHY/ST-BubbleDialogue.git \
   public/scripts/extensions/third-party/ST-BubbleDialogue
-
-# 2. 运行安装脚本（完成服务端插件链接和配置检查）
 bash public/scripts/extensions/third-party/ST-BubbleDialogue/install.sh
-
-# 3. 重启 SillyTavern
-```
-
-### 方式三：使用安装脚本（离线和本地）
-
-如果已经将仓库下载到本地任意位置，运行：
-
-```bash
-# 指定 ST 根目录
-bash /path/to/ST-BubbleDialogue/install.sh /path/to/SillyTavern
+# 然后按步骤 3 修改 config.yaml，重启 ST
 ```
 
 ## 使用

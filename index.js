@@ -5413,6 +5413,9 @@ avatarDB.syncToServer = async function() {
         body: JSON.stringify({ handle, data }),
     });
     if (!resp.ok) {
+        if (resp.status === 404 || resp.status === 0) {
+            throw new Error('服务端同步插件未安装。请在 ST 根目录运行：\nbash public/scripts/extensions/third-party/ST-BubbleDialogue/install.sh');
+        }
         const err = await resp.json().catch(() => ({ error: 'HTTP ' + resp.status }));
         throw new Error(err.error || '上传失败');
     }
@@ -5426,6 +5429,9 @@ avatarDB.restoreFromServer = async function() {
     })();
     const resp = await fetch('/api/plugins/bubble-dialogue/sync/download?handle=' + encodeURIComponent(handle));
     if (!resp.ok) {
+        if (resp.status === 404 || resp.status === 0) {
+            throw new Error('服务端同步插件未安装。请在 ST 根目录运行：\nbash public/scripts/extensions/third-party/ST-BubbleDialogue/install.sh');
+        }
         const err = await resp.json().catch(() => ({ error: 'HTTP ' + resp.status }));
         throw new Error(err.error || '服务端没有备份数据');
     }
