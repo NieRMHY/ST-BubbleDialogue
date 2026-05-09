@@ -2966,9 +2966,14 @@ class AvatarManagerPanel {
           padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px;">导入</button>
         <button id="bam-btn-export" style="background:rgba(255,255,255,0.06); border:none; color:#aaa;
           padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px;">导出</button>
-        <button id="bam-btn-sync" style="background:rgba(74,108,247,0.12); border:1px solid rgba(74,108,247,0.25); color:#b9c7ff; padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px;">☁ 同步</button>
+        <button id="bam-btn-sync-upload" style="background:rgba(74,108,247,0.12); border:1px solid rgba(74,108,247,0.25); color:#b9c7ff; padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px;">☁ 上传</button>
+        <button id="bam-btn-sync-restore" style="background:rgba(255,255,255,0.06); border:none; color:#aaa;
+          padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px;">☁ 恢复</button>
         <button id="bam-btn-close" style="background:none; border:none; color:#888;
           font-size:20px; cursor:pointer; padding:0 4px; line-height:1;">&times;</button>
+      </div>
+      <div style="padding:2px 20px 0; display:flex; align-items:center; gap:5px;">
+        <span id="bam-sync-status" style="font-size:11px; color:#666;">○ 检查中...</span>
       </div>
     </div>
 
@@ -3528,32 +3533,102 @@ class AvatarManagerPanel {
       try { await this.db.exportCharacterDataToFile(this._getActiveCharId()); } catch (err) { alert('导出失败: ' + err.message); }
     });
 
-    // 同步按钮事件
-    $('#bam-btn-sync').addEventListener('click', async () => {
-      const syncBtn = $('#bam-btn-sync');
+    // ☁ 上传
+    $('#bam-btn-sync-upload').addEventListener('click', async () => {
+      const btn = $('#bam-btn-sync-upload');
       const db = this.db;
       const charId = this._getActiveCharId();
-      const origText = syncBtn.textContent;
-      syncBtn.disabled = true;
-      syncBtn.textContent = '同步中...';
+      const origText = btn.textContent;
+      btn.disabled = true; btn.textContent = '上传中...';
       try {
         const stats = await db.getLocalDataStats(charId);
         if (stats.avatarCount === 0 && stats.fontCount === 0) {
-          alert('没有需要同步的数据。请先上传头像或数据包。');
+          alert('没有需要上传的数据。请先上传头像或数据包。');
+          return;
+        }
+        // 检查服务端时间戳
+        const serverTs = await db._getServerTimestamp(charId);
+        const localTs = await db.getConfig('sync_lastAt_' + (charId || GLOBAL_CHAR_ID), 0);
+        let skipConfirm = false;
+        if (serverTs > 0 && serverTs > localTs) {
+          if (!confirm('⚠ 服务端数据更新（' + new Date(serverTs).toLocaleString() + '），\n继续上传将覆盖服务端数据。\n\n确定覆盖？')) return;
+        } else if (serverTs > 0 && serverTs === localTs) {
+          alert('✅ 数据一致，无需上传。');
           return;
         }
         const scopeLabel = charId ? '当前角色卡' : '全局';
-        const msg = '确认同步？[范围: ' + scopeLabel + ']\n头像: ' + stats.avatarCount + ' 张\n情绪差分: ' + stats.moodAvatarCount + ' 张\n字体: ' + stats.fontCount + ' 个\n总计: ' + (stats.totalSize / 1024 / 1024).toFixed(2) + ' MB\n\n同步后可在其他设备上恢复。';
-        if (!confirm(msg)) return;
+        if (!confirm('确认上传？[范围: ' + scopeLabel + ']\n头像: ' + stats.avatarCount + ' 张\n情绪差分: ' + stats.moodAvatarCount + ' 张\n字体: ' + stats.fontCount + ' 个\n总计: ' + (stats.totalSize / 1024 / 1024).toFixed(2) + ' MB')) return;
         const result = await db.syncToServer(charId);
-        alert('✅ 同步成功！[范围: ' + scopeLabel + ']\n数据大小: ' + (result.size / 1024 / 1024).toFixed(2) + ' MB\n已存入 data/bubble-sync/\n\n在其他设备上打开此页面时将自动恢复。');
+        const now = Date.now();
+        await db.setConfig('sync_lastAt_' + (charId || GLOBAL_CHAR_ID), now);
+        this._updateSyncStatus(db, charId);
+        alert('✅ 上传成功！[范围: ' + scopeLabel + ']\n大小: ' + (result.size / 1024 / 1024).toFixed(2) + ' MB\n→ data/bubble-sync/');
       } catch (err) {
-        alert('❌ 同步失败: ' + err.message);
+        alert('❌ 上传失败: ' + err.message);
       } finally {
-        syncBtn.disabled = false;
-        syncBtn.textContent = origText;
+        btn.disabled = false; btn.textContent = origText;
       }
     });
+
+    // ☁ 恢复
+    $('#bam-btn-sync-restore').addEventListener('click', async () => {
+      const btn = $('#bam-btn-sync-restore');
+      const db = this.db;
+      const charId = this._getActiveCharId();
+      const origText = btn.textContent;
+      btn.disabled = true; btn.textContent = '恢复中...';
+      try {
+        const hasServer = await db.hasServerData();
+        if (!hasServer) { alert('服务端没有备份数据。'); return; }
+        const stats = await db.getLocalDataStats(charId);
+        const scopeLabel = charId ? '当前角色卡' : '全局';
+        if (stats.avatarCount + stats.moodAvatarCount + stats.fontCount > 0) {
+          if (!confirm('⚠ 将覆盖当前本地数据！\n[范围: ' + scopeLabel + ']\n\n头像: ' + stats.avatarCount + ' 张\n情绪差分: ' + stats.moodAvatarCount + ' 张\n字体: ' + stats.fontCount + ' 个\n\n确定从服务端恢复？')) return;
+        }
+        await db.restoreFromServer(charId);
+        await db.setConfig('sync_lastAt_' + (charId || GLOBAL_CHAR_ID), Date.now());
+        this._updateSyncStatus(db, charId);
+        this._refreshList();
+        alert('✅ 恢复成功！[范围: ' + scopeLabel + ']\n已从 data/bubble-sync/ 恢复。');
+      } catch (err) {
+        alert('❌ 恢复失败: ' + err.message);
+      } finally {
+        btn.disabled = false; btn.textContent = origText;
+      }
+    });
+
+    // 同步状态刷新
+    this._updateSyncStatus = async (db, charId) => {
+      const el = document.getElementById('bam-sync-status');
+      if (!el) return;
+      try {
+        const id = charId || GLOBAL_CHAR_ID;
+        const stats = await db.getLocalDataStats(charId);
+        const hasLocal = stats.avatarCount + stats.moodAvatarCount + stats.fontCount > 0;
+        const lastSync = await db.getConfig('sync_lastAt_' + id, 0);
+        const serverTs = await db._getServerTimestamp(charId);
+
+        if (!hasLocal) {
+          el.innerHTML = '<span style="color:#888;">○ 无本地数据</span>';
+        } else if (lastSync > 0 && serverTs > 0 && serverTs > lastSync) {
+          const ago = _formatTimeAgo(serverTs);
+          el.innerHTML = '<span style="color:#58a6ff;">● 服务端有更新 · ' + ago + '</span>';
+        } else if (lastSync > 0) {
+          const ago = _formatTimeAgo(lastSync);
+          el.innerHTML = '<span style="color:#3fb950;">● 已同步 · ' + ago + '</span>';
+        } else {
+          el.innerHTML = '<span style="color:#d29922;">● 本地未同步</span>';
+        }
+      } catch { el.innerHTML = '<span style="color:#888;">○ 检查失败</span>'; }
+    };
+
+    // 面板打开后刷新状态
+    const origBindEvents = this._bindEvents;
+    const panel = this;
+    this._bindEvents = function() {
+      origBindEvents.call(this);
+      setTimeout(() => panel._updateSyncStatus(panel.db, panel._getActiveCharId()), 1000);
+    };
 
     $('#bam-btn-import').addEventListener('click', () => $('#bam-import-input').click());
     $('#bam-import-input').addEventListener('change', async (e) => {
@@ -5259,6 +5334,14 @@ function _syncGetHandle() {
     catch { return 'default'; }
 }
 
+function _formatTimeAgo(ts) {
+    const sec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+    if (sec < 60) return '刚刚';
+    if (sec < 3600) return Math.floor(sec / 60) + '分钟前';
+    if (sec < 86400) return Math.floor(sec / 3600) + '小时前';
+    return Math.floor(sec / 86400) + '天前';
+}
+
 // 导出同步数据（可选 charId 过滤）
 avatarDB.exportSyncData = async function(charId) {
     if (charId) {
@@ -5313,6 +5396,21 @@ avatarDB.getLocalDataStats = async function(charId) {
         cgImageCount: 0,
         totalSize: [...avatars, ...moodAvatars, ...allFonts].reduce((s, r) => s + (r.fileSize || 0), 0)
     };
+};
+
+// Get server timestamp for comparison
+avatarDB._getServerTimestamp = async function(charId) {
+    try {
+        const handle = _syncGetHandle();
+        const params = new URLSearchParams({ handle });
+        if (charId) params.set('charId', charId);
+        const resp = await fetch('/api/plugins/bubble-dialogue/sync/status?' + params.toString(), {
+            headers: _syncApiHeaders(),
+        });
+        if (!resp.ok) return 0;
+        const status = await resp.json();
+        return status.timestamp || 0;
+    } catch { return 0; }
 };
 
 // Sync to server
