@@ -3,7 +3,7 @@ import {
     event_types,
     saveSettingsDebounced,
     setExtensionPrompt,
-} from '../../../script.js';
+} from '../../../../script.js';
 import {
     extension_settings,
     getContext,
