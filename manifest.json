@@ -1,0 +1,13 @@
+{
+    "display_name": "Bubble Dialogue (对话渲染系统)",
+    "loading_order": 7,
+    "requires": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "NieRMHY",
+    "version": "8.0.0",
+    "homePage": "https://github.com/NieRMHY/ST-BubbleDialogue",
+    "hooks": {
+        "activate": "init"
+    }
+}
