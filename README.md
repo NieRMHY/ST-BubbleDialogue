@@ -1,7 +1,6 @@
 # ST-BubbleDialogue (对话渲染系统)
 
 > 原作者：Silyltavern Discord 频道 [[链接]](https://discord.com/channels/1134557553011998840/1488227552374952147)  
-> 本仓库已获得原作者授权发布。
 
 SillyTavern 对话气泡渲染扩展，提供头像管理、对话气泡美化、情绪差分头像、CG 图片库和多设备数据同步功能。
 
