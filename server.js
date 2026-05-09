@@ -7,7 +7,8 @@ export const info = {
     description: '对话渲染系统数据同步 API — 多设备头像/字体/CG 图片同步'
 };
 
-const DATA_DIR = path.resolve(import.meta.dirname, '../../data/bubble-sync');
+// ST 启动时将工作目录设为 ST 根目录
+const DATA_DIR = path.resolve(process.cwd(), 'data/bubble-sync');
 
 function ensureDir(dir) {
     if (!fs.existsSync(dir)) {

@@ -3578,7 +3578,7 @@ class AvatarManagerPanel {
       const origText = btn.textContent;
       btn.disabled = true; btn.textContent = '恢复中...';
       try {
-        const hasServer = await db.hasServerData();
+        const hasServer = await db.hasServerData(charId);
         if (!hasServer) { alert('服务端没有备份数据。'); return; }
         const stats = await db.getLocalDataStats(charId);
         const scopeLabel = charId ? '当前角色卡' : '全局';
@@ -5453,10 +5453,12 @@ avatarDB.restoreFromServer = async function(charId) {
 };
 
 // Check if server has data
-avatarDB.hasServerData = async function() {
+avatarDB.hasServerData = async function(charId) {
     try {
         const handle = _syncGetHandle();
-        const resp = await fetch('/api/plugins/bubble-dialogue/sync/status?handle=' + encodeURIComponent(handle), {
+        const params = new URLSearchParams({ handle });
+        if (charId) params.set('charId', charId);
+        const resp = await fetch('/api/plugins/bubble-dialogue/sync/status?' + params.toString(), {
             headers: _syncApiHeaders(),
         });
         if (!resp.ok) return false;
@@ -5493,7 +5495,7 @@ avatarDB._syncGetAll = function(storeName) {
 
 async function autoRestore(db) {
     try {
-        const hasData = await db.hasServerData();
+        const hasData = await db.hasServerData(GLOBAL_CHAR_ID);
         if (!hasData) return;
         const stats = await db.getLocalDataStats(GLOBAL_CHAR_ID);
         if (stats.avatarCount + stats.moodAvatarCount + stats.fontCount > 0) return;
