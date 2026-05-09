@@ -2965,6 +2965,7 @@ class AvatarManagerPanel {
           padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px;">导入</button>
         <button id="bam-btn-export" style="background:rgba(255,255,255,0.06); border:none; color:#aaa;
           padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px;">导出</button>
+        <button id="bam-btn-sync" style="background:rgba(74,108,247,0.12); border:1px solid rgba(74,108,247,0.25); color:#b9c7ff; padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px;">☁ 同步</button>
         <button id="bam-btn-close" style="background:none; border:none; color:#888;
           font-size:20px; cursor:pointer; padding:0 4px; line-height:1;">&times;</button>
       </div>
@@ -3524,6 +3525,31 @@ class AvatarManagerPanel {
 
     $('#bam-btn-export').addEventListener('click', async () => {
       try { await this.db.exportCharacterDataToFile(this._getActiveCharId()); } catch (err) { alert('导出失败: ' + err.message); }
+    });
+
+    // 同步按钮事件
+    $('#bam-btn-sync').addEventListener('click', async () => {
+      const syncBtn = $('#bam-btn-sync');
+      const db = this.db;
+      const origText = syncBtn.textContent;
+      syncBtn.disabled = true;
+      syncBtn.textContent = '同步中...';
+      try {
+        const stats = await db.getLocalDataStats();
+        if (stats.avatarCount === 0 && stats.fontCount === 0 && stats.cgImageCount === 0) {
+          alert('没有需要同步的数据。请先上传头像或数据包。');
+          return;
+        }
+        const msg = '确认同步？\n头像: ' + stats.avatarCount + ' 张\n情绪差分: ' + stats.moodAvatarCount + ' 张\n字体: ' + stats.fontCount + ' 个\nCG图片: ' + stats.cgImageCount + ' 张\n总计: ' + (stats.totalSize / 1024 / 1024).toFixed(2) + ' MB\n\n同步后可在其他设备上恢复。';
+        if (!confirm(msg)) return;
+        const result = await db.syncToServer();
+        alert('✅ 同步成功！\n数据大小: ' + (result.size / 1024 / 1024).toFixed(2) + ' MB\n已存入 data/bubble-sync/\n\n在其他设备上打开此页面时将自动恢复。');
+      } catch (err) {
+        alert('❌ 同步失败: ' + err.message);
+      } finally {
+        syncBtn.disabled = false;
+        syncBtn.textContent = origText;
+      }
     });
 
     $('#bam-btn-import').addEventListener('click', () => $('#bam-import-input').click());
@@ -5456,45 +5482,8 @@ avatarDB.hasServerData = async function() {
 
 
 // ============================================================
-//  同步按钮注入 + 自动恢复
+//  自动恢复（启动时检测服务端备份）
 // ============================================================
-
-function injectSyncButton() {
-    const exportBtn = document.getElementById('bam-btn-export');
-    if (!exportBtn) { setTimeout(injectSyncButton, 500); return; }
-    if (document.getElementById('bam-btn-sync')) return;
-
-    const syncBtn = document.createElement('button');
-    syncBtn.id = 'bam-btn-sync';
-    syncBtn.style.cssText = 'background:rgba(74,108,247,0.12); border:1px solid rgba(74,108,247,0.25); color:#b9c7ff; padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px;';
-    syncBtn.textContent = '☁ 同步';
-
-    syncBtn.addEventListener('click', async () => {
-        if (!window.avatarDB) { alert('对话渲染系统未加载'); return; }
-        const db = window.avatarDB;
-        const origText = syncBtn.textContent;
-        syncBtn.disabled = true;
-        syncBtn.textContent = '同步中...';
-        try {
-            const stats = await db.getLocalDataStats();
-            if (stats.avatarCount === 0 && stats.fontCount === 0 && stats.cgImageCount === 0) {
-                alert('没有需要同步的数据。请先上传头像或数据包。');
-                return;
-            }
-            const msg = '确认同步到服务端？\n头像: ' + stats.avatarCount + ' 张\n情绪差分: ' + stats.moodAvatarCount + ' 张\n字体: ' + stats.fontCount + ' 个\nCG图片: ' + stats.cgImageCount + ' 张\n总计: ' + (stats.totalSize / 1024 / 1024).toFixed(2) + ' MB\n\n同步后可在其他设备上恢复。';
-            if (!confirm(msg)) return;
-            const result = await db.syncToServer();
-            alert('✅ 同步成功！\n数据大小: ' + (result.size / 1024 / 1024).toFixed(2) + ' MB\n\n在其他设备上打开此页面时将自动恢复。');
-        } catch (err) {
-            alert('❌ 同步失败: ' + err.message);
-        } finally {
-            syncBtn.disabled = false;
-            syncBtn.textContent = origText;
-        }
-    });
-
-    exportBtn.parentNode.insertBefore(syncBtn, exportBtn.nextSibling);
-}
 
 async function autoRestore(db) {
     try {
@@ -7113,9 +7102,6 @@ export function init() {
 
     // Register regex script (deferred to avoid blocking)
     setTimeout(registerBubbleRegex, 5000);
-
-    // Inject sync button (deferred - waits for panel to be opened)
-    setTimeout(injectSyncButton, 3000);
 
     // Auto-restore from server (deferred)
     setTimeout(() => autoRestore(avatarDB), 4000);
