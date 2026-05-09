@@ -5217,6 +5217,190 @@ function injectWandMenuItem() {
 //  AvatarDB.prototype 服务端同步扩展 (ST Native)
 // ============================================================
 
+// 工具：Blob → base64 (standalone, used by exportFullData)
+function blobToBase64_Sync(blob) {
+    if (!blob) return Promise.resolve(null);
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+    });
+}
+
+// 工具：base64 → Blob (standalone, used by restoreFromData)
+function base64ToBlob_Sync(dataUrl) {
+    if (!dataUrl) return null;
+    const parts = dataUrl.split(',');
+    const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/webp';
+    const bytes = atob(parts[1]);
+    const arr = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+    return new Blob([arr], { type: mime });
+}
+
+// Store name constants (matching IndexedDB stores)
+const _SYNC_STORE_AVATARS = STORE_AVATARS;
+const _SYNC_STORE_MOOD_AVATARS = STORE_MOOD_AVATARS;
+const _SYNC_STORE_LOCAL_FONTS = STORE_LOCAL_FONTS;
+const _SYNC_STORE_CONFIG = STORE_CONFIG;
+const _SYNC_STORE_CG_GROUPS = STORE_CG_GROUPS;
+const _SYNC_STORE_CG_IMAGES = STORE_CG_IMAGES;
+
+// Helper: get all records from a store
+avatarDB._syncGetAll = function(storeName) {
+    return new Promise((resolve, reject) => {
+        const tx = this.db.transaction(storeName, 'readonly');
+        const req = tx.objectStore(storeName).getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(new Error('_syncGetAll ' + storeName + ' 失败'));
+    });
+};
+
+// Helper: clear all records from a store
+avatarDB._syncClearStore = function(storeName) {
+    return new Promise((resolve, reject) => {
+        const tx = this.db.transaction(storeName, 'readwrite');
+        const req = tx.objectStore(storeName).clear();
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(new Error('_syncClearStore ' + storeName + ' 失败'));
+    });
+};
+
+// Export all data from IndexedDB
+avatarDB.exportFullData = async function() {
+    await this._ensureDB();
+    const avatars = await this._syncGetAll(_SYNC_STORE_AVATARS);
+    const moodAvatars = await this._syncGetAll(_SYNC_STORE_MOOD_AVATARS);
+    const fonts = await this._syncGetAll(_SYNC_STORE_LOCAL_FONTS);
+    const config = await this.getAllConfig();
+    const cgGroups = await this._syncGetAll(_SYNC_STORE_CG_GROUPS);
+    const cgImages = await this._syncGetAll(_SYNC_STORE_CG_IMAGES);
+
+    const exportData = {
+        version: '7.1-sync',
+        exportedAt: new Date().toISOString(),
+        avatars: [],
+        moodAvatars: [],
+        fonts: [],
+        cgGroups: cgGroups,
+        cgImages: [],
+        config: config
+    };
+
+    for (const r of avatars) {
+        exportData.avatars.push({
+            alias: r.alias, mimeType: r.mimeType, fileName: r.fileName,
+            fileSize: r.fileSize, width: r.width, height: r.height,
+            sourceUrl: r.sourceUrl, createdAt: r.createdAt, updatedAt: r.updatedAt,
+            imageBase64: r.imageBlob ? await blobToBase64_Sync(r.imageBlob) : null
+        });
+    }
+    for (const r of moodAvatars) {
+        exportData.moodAvatars.push({
+            id: r.id, charId: r.charId, alias: r.alias, moodId: r.moodId,
+            mimeType: r.mimeType, fileName: r.fileName,
+            fileSize: r.fileSize, width: r.width, height: r.height,
+            sourceUrl: r.sourceUrl, createdAt: r.createdAt, updatedAt: r.updatedAt,
+            imageBase64: r.imageBlob ? await blobToBase64_Sync(r.imageBlob) : null
+        });
+    }
+    for (const r of fonts) {
+        exportData.fonts.push({
+            id: r.id, family: r.family, name: r.name,
+            mimeType: r.mimeType, fileName: r.fileName, fileSize: r.fileSize,
+            format: r.format, createdAt: r.createdAt,
+            fontBase64: r.fontBlob ? await blobToBase64_Sync(r.fontBlob) : null
+        });
+    }
+    for (const r of cgImages) {
+        exportData.cgImages.push({
+            id: r.id, group: r.group,
+            mimeType: r.mimeType, fileName: r.fileName, fileSize: r.fileSize,
+            imageBase64: r.imageBlob ? await blobToBase64_Sync(r.imageBlob) : null
+        });
+    }
+    return exportData;
+};
+
+// Restore data into IndexedDB
+avatarDB.restoreFromData = async function(importData) {
+    if (!importData || importData.version !== '7.1-sync') {
+        throw new Error('无效的同步数据格式');
+    }
+    await this._ensureDB();
+    const tx = this.db.transaction(
+        [_SYNC_STORE_AVATARS, _SYNC_STORE_MOOD_AVATARS, _SYNC_STORE_LOCAL_FONTS, _SYNC_STORE_CONFIG, _SYNC_STORE_CG_GROUPS, _SYNC_STORE_CG_IMAGES],
+        'readwrite'
+    );
+    await Promise.all([
+        this._syncClearStore(_SYNC_STORE_AVATARS),
+        this._syncClearStore(_SYNC_STORE_MOOD_AVATARS),
+        this._syncClearStore(_SYNC_STORE_LOCAL_FONTS),
+        this._syncClearStore(_SYNC_STORE_CG_GROUPS),
+        this._syncClearStore(_SYNC_STORE_CG_IMAGES)
+    ]);
+
+    const avatarStore = tx.objectStore(_SYNC_STORE_AVATARS);
+    for (const r of (importData.avatars || [])) {
+        const record = { ...r };
+        if (r.imageBase64) { record.imageBlob = base64ToBlob_Sync(r.imageBase64); delete record.imageBase64; }
+        avatarStore.put(record);
+    }
+
+    const moodStore = tx.objectStore(_SYNC_STORE_MOOD_AVATARS);
+    for (const r of (importData.moodAvatars || [])) {
+        const record = { ...r };
+        if (r.imageBase64) { record.imageBlob = base64ToBlob_Sync(r.imageBase64); delete record.imageBase64; }
+        moodStore.put(record);
+    }
+
+    const fontStore = tx.objectStore(_SYNC_STORE_LOCAL_FONTS);
+    for (const r of (importData.fonts || [])) {
+        const record = { ...r };
+        if (r.fontBase64) { record.fontBlob = base64ToBlob_Sync(r.fontBase64); delete record.fontBase64; }
+        fontStore.put(record);
+    }
+
+    const configStore = tx.objectStore(_SYNC_STORE_CONFIG);
+    for (const [key, value] of Object.entries(importData.config || {})) {
+        configStore.put({ key, value });
+    }
+
+    const cgGroupStore = tx.objectStore(_SYNC_STORE_CG_GROUPS);
+    for (const r of (importData.cgGroups || [])) { cgGroupStore.put(r); }
+
+    const cgImageStore = tx.objectStore(_SYNC_STORE_CG_IMAGES);
+    for (const r of (importData.cgImages || [])) {
+        const record = { ...r };
+        if (r.imageBase64) { record.imageBlob = base64ToBlob_Sync(r.imageBase64); delete record.imageBase64; }
+        cgImageStore.put(record);
+    }
+
+    return new Promise((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(new Error('数据恢复事务失败'));
+    });
+};
+
+// Get local data statistics
+avatarDB.getLocalDataStats = async function() {
+    await this._ensureDB();
+    const [avatars, moodAvatars, fonts, cgImages] = await Promise.all([
+        this._syncGetAll(_SYNC_STORE_AVATARS),
+        this._syncGetAll(_SYNC_STORE_MOOD_AVATARS),
+        this._syncGetAll(_SYNC_STORE_LOCAL_FONTS),
+        this._syncGetAll(_SYNC_STORE_CG_IMAGES)
+    ]);
+    return {
+        avatarCount: avatars.length,
+        moodAvatarCount: moodAvatars.length,
+        fontCount: fonts.length,
+        cgImageCount: cgImages.length,
+        totalSize: [...avatars, ...moodAvatars, ...fonts, ...cgImages].reduce((s, r) => s + (r.fileSize || 0), 0)
+    };
+};
+
 avatarDB.syncToServer = async function() {
     const data = await this.exportFullData();
     const handle = (() => {
