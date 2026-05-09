@@ -1,6 +1,7 @@
 import {
     eventSource,
     event_types,
+    getRequestHeaders,
     saveSettingsDebounced,
     setExtensionPrompt,
 } from '../../../../script.js';
@@ -3531,19 +3532,21 @@ class AvatarManagerPanel {
     $('#bam-btn-sync').addEventListener('click', async () => {
       const syncBtn = $('#bam-btn-sync');
       const db = this.db;
+      const charId = this._getActiveCharId();
       const origText = syncBtn.textContent;
       syncBtn.disabled = true;
       syncBtn.textContent = '同步中...';
       try {
-        const stats = await db.getLocalDataStats();
-        if (stats.avatarCount === 0 && stats.fontCount === 0 && stats.cgImageCount === 0) {
+        const stats = await db.getLocalDataStats(charId);
+        if (stats.avatarCount === 0 && stats.fontCount === 0) {
           alert('没有需要同步的数据。请先上传头像或数据包。');
           return;
         }
-        const msg = '确认同步？\n头像: ' + stats.avatarCount + ' 张\n情绪差分: ' + stats.moodAvatarCount + ' 张\n字体: ' + stats.fontCount + ' 个\nCG图片: ' + stats.cgImageCount + ' 张\n总计: ' + (stats.totalSize / 1024 / 1024).toFixed(2) + ' MB\n\n同步后可在其他设备上恢复。';
+        const scopeLabel = charId ? '当前角色卡' : '全局';
+        const msg = '确认同步？[范围: ' + scopeLabel + ']\n头像: ' + stats.avatarCount + ' 张\n情绪差分: ' + stats.moodAvatarCount + ' 张\n字体: ' + stats.fontCount + ' 个\n总计: ' + (stats.totalSize / 1024 / 1024).toFixed(2) + ' MB\n\n同步后可在其他设备上恢复。';
         if (!confirm(msg)) return;
-        const result = await db.syncToServer();
-        alert('✅ 同步成功！\n数据大小: ' + (result.size / 1024 / 1024).toFixed(2) + ' MB\n已存入 data/bubble-sync/\n\n在其他设备上打开此页面时将自动恢复。');
+        const result = await db.syncToServer(charId);
+        alert('✅ 同步成功！[范围: ' + scopeLabel + ']\n数据大小: ' + (result.size / 1024 / 1024).toFixed(2) + ' MB\n已存入 data/bubble-sync/\n\n在其他设备上打开此页面时将自动恢复。');
       } catch (err) {
         alert('❌ 同步失败: ' + err.message);
       } finally {
@@ -5241,9 +5244,130 @@ function injectWandMenuItem() {
 
 // ============================================================
 //  AvatarDB.prototype 服务端同步扩展 (ST Native)
+//  支持角色卡绑定：同步/恢复时可按 charId 过滤
+//  使用 getRequestHeaders() 通过 ST 认证
 // ============================================================
 
-// 工具：Blob → base64 (standalone, used by exportFullData)
+function _syncApiHeaders() {
+    const h = { 'Content-Type': 'application/json' };
+    try { Object.assign(h, getRequestHeaders()); } catch {}
+    return h;
+}
+
+function _syncGetHandle() {
+    try { const ctx = getContext(); return ctx?.name1 || 'default'; }
+    catch { return 'default'; }
+}
+
+// 导出同步数据（可选 charId 过滤）
+avatarDB.exportSyncData = async function(charId) {
+    if (charId) {
+        // 按角色卡范围导出，复用已有的 exportCharacterData
+        const charData = await this.exportCharacterData(charId, { urlOnly: false });
+        // 字体是全局的，始终附带
+        const fonts = await this._syncGetAll(STORE_LOCAL_FONTS);
+        charData.fonts = [];
+        for (const r of fonts) {
+            charData.fonts.push({
+                id: r.id, family: r.family, name: r.name,
+                mimeType: r.mimeType, fileName: r.fileName, fileSize: r.fileSize,
+                format: r.format, createdAt: r.createdAt,
+                fontBase64: r.fontBlob ? await blobToBase64_Sync(r.fontBlob) : null
+            });
+        }
+        return charData;
+    }
+    // 全局导出（主页面、无角色时）
+    return this.exportCharacterData(GLOBAL_CHAR_ID, { urlOnly: false });
+};
+
+// 恢复同步数据（可选 charId 范围）
+avatarDB.restoreSyncData = async function(importData, charId) {
+    if (!importData || !importData.version) {
+        throw new Error('无效的同步数据格式');
+    }
+    // 复用已有的 importFromFile 逻辑：直接调 _importCharacterData
+    if (charId) {
+        return this._importCharacterData(importData, charId);
+    }
+    return this._importCharacterData(importData, GLOBAL_CHAR_ID);
+};
+
+// Get local data statistics (optionally scoped to charId)
+avatarDB.getLocalDataStats = async function(charId) {
+    await this._ensureDB();
+    const safeCharId = String(charId || GLOBAL_CHAR_ID);
+    const prefix = safeCharId + CHAR_ID_SEPARATOR;
+
+    const allAvatars = await this._syncGetAll(STORE_AVATARS);
+    const allMoodAvatars = await this._syncGetAll(STORE_MOOD_AVATARS);
+    const allFonts = await this._syncGetAll(STORE_LOCAL_FONTS);
+
+    const avatars = allAvatars.filter(r => r.alias.startsWith(prefix));
+    const moodAvatars = allMoodAvatars.filter(r => r.charId === safeCharId);
+
+    return {
+        avatarCount: avatars.length,
+        moodAvatarCount: moodAvatars.length,
+        fontCount: allFonts.length,
+        cgImageCount: 0,
+        totalSize: [...avatars, ...moodAvatars, ...allFonts].reduce((s, r) => s + (r.fileSize || 0), 0)
+    };
+};
+
+// Sync to server
+avatarDB.syncToServer = async function(charId) {
+    const data = await this.exportSyncData(charId);
+    const handle = _syncGetHandle();
+    const resp = await fetch('/api/plugins/bubble-dialogue/sync/upload', {
+        method: 'POST',
+        headers: _syncApiHeaders(),
+        body: JSON.stringify({ handle, charId: charId || GLOBAL_CHAR_ID, data }),
+    });
+    if (!resp.ok) {
+        if (resp.status === 404 || resp.status === 0) {
+            throw new Error('服务端同步插件未安装。请运行：\nbash public/scripts/extensions/third-party/ST-BubbleDialogue/install.sh');
+        }
+        const err = await resp.json().catch(() => ({ error: 'HTTP ' + resp.status }));
+        throw new Error(err.error || '上传失败');
+    }
+    return await resp.json();
+};
+
+// Restore from server
+avatarDB.restoreFromServer = async function(charId) {
+    const handle = _syncGetHandle();
+    const params = new URLSearchParams({ handle });
+    if (charId) params.set('charId', charId);
+    const resp = await fetch('/api/plugins/bubble-dialogue/sync/download?' + params.toString(), {
+        headers: _syncApiHeaders(),
+    });
+    if (!resp.ok) {
+        if (resp.status === 404 || resp.status === 0) {
+            throw new Error('服务端同步插件未安装。请运行：\nbash public/scripts/extensions/third-party/ST-BubbleDialogue/install.sh');
+        }
+        const err = await resp.json().catch(() => ({ error: 'HTTP ' + resp.status }));
+        throw new Error(err.error || '服务端没有备份数据');
+    }
+    const importData = await resp.json();
+    await this.restoreSyncData(importData, charId);
+    return { success: true };
+};
+
+// Check if server has data
+avatarDB.hasServerData = async function() {
+    try {
+        const handle = _syncGetHandle();
+        const resp = await fetch('/api/plugins/bubble-dialogue/sync/status?handle=' + encodeURIComponent(handle), {
+            headers: _syncApiHeaders(),
+        });
+        if (!resp.ok) return false;
+        const status = await resp.json();
+        return status.exists === true;
+    } catch { return false; }
+};
+
+// Helpers needed by exportSyncData
 function blobToBase64_Sync(blob) {
     if (!blob) return Promise.resolve(null);
     return new Promise((resolve, reject) => {
@@ -5254,26 +5378,6 @@ function blobToBase64_Sync(blob) {
     });
 }
 
-// 工具：base64 → Blob (standalone, used by restoreFromData)
-function base64ToBlob_Sync(dataUrl) {
-    if (!dataUrl) return null;
-    const parts = dataUrl.split(',');
-    const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/webp';
-    const bytes = atob(parts[1]);
-    const arr = new Uint8Array(bytes.length);
-    for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-    return new Blob([arr], { type: mime });
-}
-
-// Store name constants (matching IndexedDB stores)
-const _SYNC_STORE_AVATARS = STORE_AVATARS;
-const _SYNC_STORE_MOOD_AVATARS = STORE_MOOD_AVATARS;
-const _SYNC_STORE_LOCAL_FONTS = STORE_LOCAL_FONTS;
-const _SYNC_STORE_CONFIG = STORE_CONFIG;
-const _SYNC_STORE_CG_GROUPS = STORE_CG_GROUPS;
-const _SYNC_STORE_CG_IMAGES = STORE_CG_IMAGES;
-
-// Helper: get all records from a store
 avatarDB._syncGetAll = function(storeName) {
     return new Promise((resolve, reject) => {
         const tx = this.db.transaction(storeName, 'readonly');
@@ -5281,202 +5385,6 @@ avatarDB._syncGetAll = function(storeName) {
         req.onsuccess = () => resolve(req.result || []);
         req.onerror = () => reject(new Error('_syncGetAll ' + storeName + ' 失败'));
     });
-};
-
-// Helper: clear all records from a store
-avatarDB._syncClearStore = function(storeName) {
-    return new Promise((resolve, reject) => {
-        const tx = this.db.transaction(storeName, 'readwrite');
-        const req = tx.objectStore(storeName).clear();
-        req.onsuccess = () => resolve();
-        req.onerror = () => reject(new Error('_syncClearStore ' + storeName + ' 失败'));
-    });
-};
-
-// Export all data from IndexedDB
-avatarDB.exportFullData = async function() {
-    await this._ensureDB();
-    const avatars = await this._syncGetAll(_SYNC_STORE_AVATARS);
-    const moodAvatars = await this._syncGetAll(_SYNC_STORE_MOOD_AVATARS);
-    const fonts = await this._syncGetAll(_SYNC_STORE_LOCAL_FONTS);
-    const config = await this.getAllConfig();
-    const cgGroups = await this._syncGetAll(_SYNC_STORE_CG_GROUPS);
-    const cgImages = await this._syncGetAll(_SYNC_STORE_CG_IMAGES);
-
-    const exportData = {
-        version: '7.1-sync',
-        exportedAt: new Date().toISOString(),
-        avatars: [],
-        moodAvatars: [],
-        fonts: [],
-        cgGroups: cgGroups,
-        cgImages: [],
-        config: config
-    };
-
-    for (const r of avatars) {
-        exportData.avatars.push({
-            alias: r.alias, mimeType: r.mimeType, fileName: r.fileName,
-            fileSize: r.fileSize, width: r.width, height: r.height,
-            sourceUrl: r.sourceUrl, createdAt: r.createdAt, updatedAt: r.updatedAt,
-            imageBase64: r.imageBlob ? await blobToBase64_Sync(r.imageBlob) : null
-        });
-    }
-    for (const r of moodAvatars) {
-        exportData.moodAvatars.push({
-            id: r.id, charId: r.charId, alias: r.alias, moodId: r.moodId,
-            mimeType: r.mimeType, fileName: r.fileName,
-            fileSize: r.fileSize, width: r.width, height: r.height,
-            sourceUrl: r.sourceUrl, createdAt: r.createdAt, updatedAt: r.updatedAt,
-            imageBase64: r.imageBlob ? await blobToBase64_Sync(r.imageBlob) : null
-        });
-    }
-    for (const r of fonts) {
-        exportData.fonts.push({
-            id: r.id, family: r.family, name: r.name,
-            mimeType: r.mimeType, fileName: r.fileName, fileSize: r.fileSize,
-            format: r.format, createdAt: r.createdAt,
-            fontBase64: r.fontBlob ? await blobToBase64_Sync(r.fontBlob) : null
-        });
-    }
-    for (const r of cgImages) {
-        exportData.cgImages.push({
-            id: r.id, group: r.group,
-            mimeType: r.mimeType, fileName: r.fileName, fileSize: r.fileSize,
-            imageBase64: r.imageBlob ? await blobToBase64_Sync(r.imageBlob) : null
-        });
-    }
-    return exportData;
-};
-
-// Restore data into IndexedDB
-avatarDB.restoreFromData = async function(importData) {
-    if (!importData || importData.version !== '7.1-sync') {
-        throw new Error('无效的同步数据格式');
-    }
-    await this._ensureDB();
-    const tx = this.db.transaction(
-        [_SYNC_STORE_AVATARS, _SYNC_STORE_MOOD_AVATARS, _SYNC_STORE_LOCAL_FONTS, _SYNC_STORE_CONFIG, _SYNC_STORE_CG_GROUPS, _SYNC_STORE_CG_IMAGES],
-        'readwrite'
-    );
-    await Promise.all([
-        this._syncClearStore(_SYNC_STORE_AVATARS),
-        this._syncClearStore(_SYNC_STORE_MOOD_AVATARS),
-        this._syncClearStore(_SYNC_STORE_LOCAL_FONTS),
-        this._syncClearStore(_SYNC_STORE_CG_GROUPS),
-        this._syncClearStore(_SYNC_STORE_CG_IMAGES)
-    ]);
-
-    const avatarStore = tx.objectStore(_SYNC_STORE_AVATARS);
-    for (const r of (importData.avatars || [])) {
-        const record = { ...r };
-        if (r.imageBase64) { record.imageBlob = base64ToBlob_Sync(r.imageBase64); delete record.imageBase64; }
-        avatarStore.put(record);
-    }
-
-    const moodStore = tx.objectStore(_SYNC_STORE_MOOD_AVATARS);
-    for (const r of (importData.moodAvatars || [])) {
-        const record = { ...r };
-        if (r.imageBase64) { record.imageBlob = base64ToBlob_Sync(r.imageBase64); delete record.imageBase64; }
-        moodStore.put(record);
-    }
-
-    const fontStore = tx.objectStore(_SYNC_STORE_LOCAL_FONTS);
-    for (const r of (importData.fonts || [])) {
-        const record = { ...r };
-        if (r.fontBase64) { record.fontBlob = base64ToBlob_Sync(r.fontBase64); delete record.fontBase64; }
-        fontStore.put(record);
-    }
-
-    const configStore = tx.objectStore(_SYNC_STORE_CONFIG);
-    for (const [key, value] of Object.entries(importData.config || {})) {
-        configStore.put({ key, value });
-    }
-
-    const cgGroupStore = tx.objectStore(_SYNC_STORE_CG_GROUPS);
-    for (const r of (importData.cgGroups || [])) { cgGroupStore.put(r); }
-
-    const cgImageStore = tx.objectStore(_SYNC_STORE_CG_IMAGES);
-    for (const r of (importData.cgImages || [])) {
-        const record = { ...r };
-        if (r.imageBase64) { record.imageBlob = base64ToBlob_Sync(r.imageBase64); delete record.imageBase64; }
-        cgImageStore.put(record);
-    }
-
-    return new Promise((resolve, reject) => {
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(new Error('数据恢复事务失败'));
-    });
-};
-
-// Get local data statistics
-avatarDB.getLocalDataStats = async function() {
-    await this._ensureDB();
-    const [avatars, moodAvatars, fonts, cgImages] = await Promise.all([
-        this._syncGetAll(_SYNC_STORE_AVATARS),
-        this._syncGetAll(_SYNC_STORE_MOOD_AVATARS),
-        this._syncGetAll(_SYNC_STORE_LOCAL_FONTS),
-        this._syncGetAll(_SYNC_STORE_CG_IMAGES)
-    ]);
-    return {
-        avatarCount: avatars.length,
-        moodAvatarCount: moodAvatars.length,
-        fontCount: fonts.length,
-        cgImageCount: cgImages.length,
-        totalSize: [...avatars, ...moodAvatars, ...fonts, ...cgImages].reduce((s, r) => s + (r.fileSize || 0), 0)
-    };
-};
-
-avatarDB.syncToServer = async function() {
-    const data = await this.exportFullData();
-    const handle = (() => {
-        try { const ctx = getContext(); return ctx?.name1 || 'default'; }
-        catch { return 'default'; }
-    })();
-    const resp = await fetch('/api/plugins/bubble-dialogue/sync/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ handle, data }),
-    });
-    if (!resp.ok) {
-        if (resp.status === 404 || resp.status === 0) {
-            throw new Error('服务端同步插件未安装。请在 ST 根目录运行：\nbash public/scripts/extensions/third-party/ST-BubbleDialogue/install.sh');
-        }
-        const err = await resp.json().catch(() => ({ error: 'HTTP ' + resp.status }));
-        throw new Error(err.error || '上传失败');
-    }
-    return await resp.json();
-};
-
-avatarDB.restoreFromServer = async function() {
-    const handle = (() => {
-        try { const ctx = getContext(); return ctx?.name1 || 'default'; }
-        catch { return 'default'; }
-    })();
-    const resp = await fetch('/api/plugins/bubble-dialogue/sync/download?handle=' + encodeURIComponent(handle));
-    if (!resp.ok) {
-        if (resp.status === 404 || resp.status === 0) {
-            throw new Error('服务端同步插件未安装。请在 ST 根目录运行：\nbash public/scripts/extensions/third-party/ST-BubbleDialogue/install.sh');
-        }
-        const err = await resp.json().catch(() => ({ error: 'HTTP ' + resp.status }));
-        throw new Error(err.error || '服务端没有备份数据');
-    }
-    const importData = await resp.json();
-    await this.restoreFromData(importData);
-    return { success: true };
-};
-
-avatarDB.hasServerData = async function() {
-    try {
-        const handle = (() => {
-            try { const ctx = getContext(); return ctx?.name1 || 'default'; }
-            catch { return 'default'; }
-        })();
-        const resp = await fetch('/api/plugins/bubble-dialogue/sync/status?handle=' + encodeURIComponent(handle));
-        if (!resp.ok) return false;
-        const status = await resp.json();
-        return status.exists === true;
-    } catch { return false; }
 };
 
 
@@ -5489,11 +5397,11 @@ async function autoRestore(db) {
     try {
         const hasData = await db.hasServerData();
         if (!hasData) return;
-        const stats = await db.getLocalDataStats();
-        if (stats.avatarCount + stats.moodAvatarCount + stats.fontCount + stats.cgImageCount > 0) return;
+        const stats = await db.getLocalDataStats(GLOBAL_CHAR_ID);
+        if (stats.avatarCount + stats.moodAvatarCount + stats.fontCount > 0) return;
         console.log('[BubbleSync] 检测到服务端备份，本地为空，询问恢复...');
         if (confirm('检测到服务端备份数据，是否恢复？\n（会覆盖当前本地数据）')) {
-            await db.restoreFromServer();
+            await db.restoreFromServer(GLOBAL_CHAR_ID);
             console.log('[BubbleSync] 从服务端恢复成功');
             if (window.avatarManagerPanel && window.avatarManagerPanel._refreshList) {
                 window.avatarManagerPanel._refreshList();
