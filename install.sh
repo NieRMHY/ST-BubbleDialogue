@@ -10,8 +10,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -n "$1" ]; then
     ST_ROOT="$(cd "$1" && pwd)"
 else
-    # 自动检测：从脚本位置向上找 4 层（third-party/ST-BubbleDialogue → extensions → scripts → public → ST）
-    ST_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+    # 自动检测：从脚本位置向上找 5 层
+    # ST-BubbleDialogue → third-party → extensions → scripts → public → ST根目录
+    ST_ROOT="$(cd "$SCRIPT_DIR/../../../../.." && pwd)"
 fi
 
 echo "========================================="
