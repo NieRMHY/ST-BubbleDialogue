@@ -7,7 +7,7 @@ import {
 import {
     extension_settings,
     getContext,
-} from '../../extensions.js';
+} from '../../../extensions.js';
 
 const MODULE_NAME = 'bubble-dialogue';
 
