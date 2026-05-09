@@ -13,28 +13,54 @@ SillyTavern 对话气泡渲染扩展，提供头像管理、对话气泡美化�
 
 ## 安装
 
-```bash
-cd SillyTavern
+### 方式一：官方扩展商店安装（推荐）
 
-# 1. 安装前端扩展
+在 SillyTavern 的 **扩展 → 管理扩展 → 安装扩展** 中粘贴以下 URL：
+
+```
+https://github.com/NieRMHY/ST-BubbleDialogue
+```
+
+<details>
+<summary>官方安装对服务端同步的限制</summary>
+
+官方安装只安装前端扩展部分。如需**服务端同步**功能，需要额外执行：
+
+```bash
+# ST 根目录下执行
+mkdir -p plugins/ST-BubbleDialogue
+ln -sf ../../../public/scripts/extensions/third-party/ST-BubbleDialogue/server.js \
+  plugins/ST-BubbleDialogue/index.js
+```
+
+并在 `config.yaml` 中设置 `enableServerPlugins: true`，然后重启 ST。
+
+</details>
+
+### 方式二：本地手动安装
+
+> [!NOTE]
+> 以下路径均以 **SillyTavern 根目录**（`SillyTavern/`）为当前目录。
+
+```bash
+# SillyTavern 根目录下执行
+# 1. 克隆前端扩展
 git clone https://github.com/NieRMHY/ST-BubbleDialogue.git \
   public/scripts/extensions/third-party/ST-BubbleDialogue
 
-# 2. 安装服务端同步插件（可选，用于多设备同步）
-mkdir -p plugins/ST-BubbleDialogue
-ln -s ../../../public/scripts/extensions/third-party/ST-BubbleDialogue/server.js \
-  plugins/ST-BubbleDialogue/index.js
+# 2. 运行安装脚本（完成服务端插件链接和配置检查）
+bash public/scripts/extensions/third-party/ST-BubbleDialogue/install.sh
 
-# 3. 启用服务端插件
-# 编辑 config.yaml，设置 enableServerPlugins: true
-
-# 4. 重启 SillyTavern
+# 3. 重启 SillyTavern
 ```
 
-或使用安装脚本：
+### 方式三：使用安装脚本（离线和本地）
+
+如果已经将仓库下载到本地任意位置，运行：
 
 ```bash
-bash public/scripts/extensions/third-party/ST-BubbleDialogue/install.sh
+# 指定 ST 根目录
+bash /path/to/ST-BubbleDialogue/install.sh /path/to/SillyTavern
 ```
 
 ## 使用
@@ -45,10 +71,29 @@ bash public/scripts/extensions/third-party/ST-BubbleDialogue/install.sh
 4. 在「CG 图片」标签管理 CG 图片库
 5. 点击 **☁ 同步** 按钮将数据备份到服务端
 
+## 目录结构
+
+```
+SillyTavern/                                        ← ST 根目录
+├── public/scripts/extensions/third-party/
+│   └── ST-BubbleDialogue/                          ← 前端扩展（本仓库）
+│       ├── manifest.json
+│       ├── index.js
+│       ├── style.css
+│       └── server.js
+├── plugins/
+│   └── ST-BubbleDialogue/
+│       └── index.js → ../../public/scripts/...     ← 软链到 server.js
+└── data/
+    └── bubble-sync/                                ← 同步数据存储
+        └── <user>/
+            └── sync.json
+```
+
 ## 依赖
 
 - SillyTavern >= 1.12.0
-- 服务端同步功能需要 `enableServerPlugins: true`（config.yaml）
+- 服务端同步功能需要 `enableServerPlugins: true`（`config.yaml`）
 
 ## 从酒馆助手迁移
 
@@ -56,7 +101,7 @@ bash public/scripts/extensions/third-party/ST-BubbleDialogue/install.sh
 
 - 不再依赖酒馆助手插件
 - 使用 ST 原生事件系统和 API
-- 同步数据存储到 `data/bubble-sync/` 目录（而非 settings.json）
+- 同步数据存储到 `data/bubble-sync/` 目录（而非 `settings.json`）
 
 旧脚本保留在 `old_json/` 目录供参考。
 
