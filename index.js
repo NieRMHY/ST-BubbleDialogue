@@ -5519,14 +5519,18 @@ async function autoRestore(db) {
 //  注册对话气泡正则脚本
 // ============================================================
 
-function registerBubbleRegex() {
+function registerBubbleRegex(forceReregister = false) {
     const REGEX_SCRIPT_ID = 'e3ab57a2-036e-48be-8d76-b272f1b302cc';
     try {
         if (!extension_settings.regex) { extension_settings.regex = []; }
         const allScripts = extension_settings.regex;
-        if (allScripts.some(s => s.id === REGEX_SCRIPT_ID)) {
-            console.log('[BubbleDialogue] 正则脚本已注册，跳过');
-            return;
+        const existing = allScripts.findIndex(s => s.id === REGEX_SCRIPT_ID);
+        if (existing >= 0) {
+            if (!forceReregister) {
+                return; // already registered, skip silently
+            }
+            // Remove old entry before re-adding (for force re-register)
+            allScripts.splice(existing, 1);
         }
         const regexScript = {
             id: REGEX_SCRIPT_ID,
@@ -7095,6 +7099,8 @@ export function init() {
         eventSource.on(event_types.CHAT_CHANGED, () => {
           invalidateInjectionCache();
           applyInjection(avatarDB);
+          // 聊天切换时重新确认正则脚本存在
+          registerBubbleRegex();
         });
       } catch (e) {
         console.warn('[BubbleDialogue] ST CHAT_CHANGED 事件注册失败:', e);
@@ -7104,12 +7110,16 @@ export function init() {
           eventOn(tavern_events.CHAT_CHANGED, () => {
             invalidateInjectionCache();
             applyInjection(avatarDB);
+            registerBubbleRegex();
           });
         }
       } catch (e) {}
 
-    // Register regex script (deferred to avoid blocking)
-    setTimeout(registerBubbleRegex, 5000);
+    // Register regex script immediately
+    registerBubbleRegex();
+
+    // 定期重新确认正则脚本未被清除（每 30 秒检查一次）
+    setInterval(() => registerBubbleRegex(), 30000);
 
     // Auto-restore from server (deferred)
     setTimeout(() => autoRestore(avatarDB), 4000);
